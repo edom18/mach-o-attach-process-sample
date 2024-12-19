@@ -128,7 +128,7 @@ int main(int argc, char* argv[])
     print_image_path(task, target_dyld_info->imageFilePath);
 
     // 見つけた dyld.dylib のヘッダを読み込む
-    size_t mach_header_size = sizeof(struct mach_header_64);
+    mach_vm_size_t mach_header_size = sizeof(struct mach_header_64);
     kr = mach_vm_read(task, (mach_vm_address_t)target_dyld_info->imageLoadAddress, mach_header_size, &readMem, &dataCnt);
     if (kr != KERN_SUCCESS)
     {
@@ -149,9 +149,98 @@ int main(int argc, char* argv[])
 
     memcpy(dyld_header, (void*)readMem, dataCnt);
 
-    if (dyld_header->magic == MH_MAGIC_64)
+    if (dyld_header->magic != MH_MAGIC_64)
     {
-        printf("This must be dyld image!\n");
+        fprintf(stderr, "Got image is not dyld library.\n");
+        free(dyld_header);
+        free(local_array);
+        mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+    }
+
+    printf("This must be dyld image!\n");
+
+    // Search __TEXT segment
+    {
+        // Point to the first of load commands.
+        vm_address_t cur = (vm_address_t)target_dyld_info->imageLoadAddress + sizeof(struct mach_header_64);
+
+        struct segment_command_64* seg_cmd = (struct segment_command_64*)malloc(sizeof(struct segment_command_64));
+        if (!seg_cmd)
+        {
+            fprintf(stderr, "Failed to allocate memory for segment_command_64\n");
+            free(dyld_header);
+            free(local_array);
+            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            return 1;
+        }
+
+        struct load_command* lc = (struct load_command*)malloc(sizeof(struct load_command));
+        if (!lc)
+        {
+            fprintf(stderr, "Failed to allocate memory for load_command\n");
+            free(dyld_header);
+            free(local_array);
+            free(seg_cmd);
+            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            return 1;
+        }
+
+        printf("Command number: %d\n", dyld_header->ncmds);
+
+        uint64_t slide = 0;
+        mach_vm_size_t size = sizeof(struct load_command);
+        for (int i = 0; i < dyld_header->ncmds; i++)
+        {
+            kr = mach_vm_read(task, cur, size, &readMem, &dataCnt);
+            if (kr != KERN_SUCCESS)
+            {
+                fprintf(stderr, "Failed to read memory from target process: %s\n", mach_error_string(kr));
+                free(dyld_header);
+                free(local_array);
+                free(seg_cmd);
+                free(lc);
+                mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+                return 1;
+            }
+
+            memcpy(lc, (void*)readMem, dataCnt);
+
+            printf("cmd: %d, size: %d\n", lc->cmd, lc->cmdsize);
+
+            if (lc->cmd == LC_SEGMENT_64)
+            {
+                // Load memory as segment_command_64
+                mach_vm_size_t seg_cmd_size = sizeof(struct segment_command_64);
+                kr = mach_vm_read(task, cur, seg_cmd_size, &readMem, &dataCnt);
+                if (kr != KERN_SUCCESS)
+                {
+                    fprintf(stderr, "Failed to read memory from target process: %s\n", mach_error_string(kr));
+                    free(dyld_header);
+                    free(local_array);
+                    free(seg_cmd);
+                    mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+                    return 1;
+                }
+
+                memcpy(seg_cmd, (void*)readMem, dataCnt);
+                if (strcmp(seg_cmd->segname, SEG_TEXT) == 0)
+                {
+                    printf("Found text segment. [%s]\n", seg_cmd->segname);
+                    printf("Text segment vmaddr: 0x%llx\n", seg_cmd->vmaddr);
+                    printf("dyld loaded address: %p\n", target_dyld_info->imageLoadAddress);
+                    slide = (uint64_t)target_dyld_info->imageLoadAddress - seg_cmd->vmaddr;
+                    printf("Slide: %llu\n", slide);
+                }
+            }
+            else if (lc->cmd == LC_SYMTAB)
+            {
+
+            }
+
+            cur += lc->cmdsize;
+        }
+
+        free(seg_cmd);
     }
 
     free(dyld_header);
