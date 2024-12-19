@@ -100,6 +100,8 @@ int main(int argc, char* argv[])
     memcpy(local_array, (void*)readMem, arraySize);
     mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
 
+    struct dyld_image_info* target_dyld_info;
+
     // ロードされたイメージ情報を表示
     for (uint32_t i = 0; i < local_infos.infoArrayCount; i++)
     {
@@ -110,8 +112,15 @@ int main(int argc, char* argv[])
         if (found == TRUE)
         {
             printf("Found the dyld at [%s]\n", local_array[i].imageFilePath);
+            target_dyld_info = (struct dyld_image_info*)&local_array[i];
             break;
         }
+    }
+
+    if (target_dyld_info)
+    {
+        printf("Saved dyld_image_info image file path: ");
+        print_image_path(task, target_dyld_info->imageFilePath);
     }
 
     free(local_array);
