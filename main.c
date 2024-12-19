@@ -364,7 +364,18 @@ int main(int argc, char* argv[])
         {
             uint32_t strx = symtab_array[i].n_un.n_strx;
             const char* symname = strtab + strx;
-            printf("Symbol name: %s\n", symname);
+            // printf("Symbol name: %s\n", symname);
+
+            if (symname && strcmp(symname, "_dlopen") == 0)
+            {
+                dlopen_sym = &symtab_array[i];
+            }
+        }
+
+        if (dlopen_sym)
+        {
+            printf("Found dlopen symbol!\n");
+            printf("dlopen symbol address: 0x%llx\n", dlopen_sym->n_value);
         }
 
         free(seg_cmd);
