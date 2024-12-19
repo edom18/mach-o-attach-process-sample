@@ -4,6 +4,7 @@
 #include <mach/mach.h>
 #include <mach/task_info.h>
 #include <mach/mach_vm.h>
+#include <mach-o/loader.h>
 #include <mach-o/dyld_images.h>
 
 #define CHUNK_SIZE 256
@@ -117,13 +118,45 @@ int main(int argc, char* argv[])
         }
     }
 
-    if (target_dyld_info)
+    if (!target_dyld_info)
     {
-        printf("Saved dyld_image_info image file path: ");
-        print_image_path(task, target_dyld_info->imageFilePath);
+        free(local_array);
+        return 1;
     }
 
+    printf("Saved dyld_image_info image file path: ");
+    print_image_path(task, target_dyld_info->imageFilePath);
+
+    // 見つけた dyld.dylib のヘッダを読み込む
+    size_t mach_header_size = sizeof(struct mach_header_64);
+    kr = mach_vm_read(task, (mach_vm_address_t)target_dyld_info->imageLoadAddress, mach_header_size, &readMem, &dataCnt);
+    if (kr != KERN_SUCCESS)
+    {
+        fprintf(stderr, "Failed to read dyld image hader: %s\n", mach_error_string(kr));
+        free(local_array);
+        mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+        return 1;
+    }
+
+    struct mach_header_64* dyld_header = malloc(sizeof(struct mach_header_64));
+    if (!dyld_header)
+    {
+        fprintf(stderr, "Failed to allocate memory for dyld_header.\n");
+        free(local_array);
+        mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+        return 1;
+    }
+
+    memcpy(dyld_header, (void*)readMem, dataCnt);
+
+    if (dyld_header->magic == MH_MAGIC_64)
+    {
+        printf("This must be dyld image!\n");
+    }
+
+    free(dyld_header);
     free(local_array);
+    mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
 
     return 0;
 }
