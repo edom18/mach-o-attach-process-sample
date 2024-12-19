@@ -6,7 +6,11 @@
 #include <mach/mach_vm.h>
 #include <mach-o/dyld_images.h>
 
+#define CHUNK_SIZE 256
+#define MAX_PATH_LENGTH 4096
+
 void print_image_path(mach_port_t task, const char* imageFilePath);
+boolean_t find_dyld_image(mach_port_t task, const char* imageFilePath);
 
 int main(int argc, char* argv[])
 {
@@ -99,9 +103,15 @@ int main(int argc, char* argv[])
     // ロードされたイメージ情報を表示
     for (uint32_t i = 0; i < local_infos.infoArrayCount; i++)
     {
-        printf("Image %u:\n", i);
-        printf("    LoadAddress: %p\n", local_array[i].imageLoadAddress);
-        print_image_path(task, local_array[i].imageFilePath);
+        // printf("Image %u:\n", i);
+        // printf("    LoadAddress: %p\n", local_array[i].imageLoadAddress);
+        // print_image_path(task, local_array[i].imageFilePath);
+        boolean_t found = find_dyld_image(task, local_array[i].imageFilePath);
+        if (found == TRUE)
+        {
+            printf("Found the dyld at [%s]\n", local_array[i].imageFilePath);
+            break;
+        }
     }
 
     free(local_array);
@@ -109,8 +119,54 @@ int main(int argc, char* argv[])
     return 0;
 }
 
-#define CHUNK_SIZE 256
-#define MAX_PATH_LENGTH 4096
+boolean_t find_dyld_image(mach_port_t task, const char* imageFilePath)
+{
+    char remote_path[MAX_PATH_LENGTH];
+    size_t total_read = 0;
+
+    kern_return_t kr;
+
+    while (total_read < MAX_PATH_LENGTH)
+    {
+        vm_offset_t readMem;
+        mach_msg_type_number_t dataCnt;
+        mach_vm_address_t read_addr = (mach_vm_address_t)((uintptr_t)imageFilePath + total_read);
+
+        size_t to_read = CHUNK_SIZE;
+        if (total_read + CHUNK_SIZE > MAX_PATH_LENGTH)
+        {
+            to_read = MAX_PATH_LENGTH - total_read;
+        }
+
+        kr = mach_vm_read(task, read_addr, to_read, &readMem, &dataCnt);
+        if (kr != KERN_SUCCESS)
+        {
+            return FALSE;
+        }
+
+        memcpy(remote_path + total_read, (void*)readMem, dataCnt);
+
+        char* null_pos = memchr(remote_path + total_read, '\0', dataCnt);
+        if (null_pos)
+        {
+            size_t str_len = (null_pos - remote_path);
+            remote_path[str_len] = '\0';
+            // printf("Image file path: %s\n", remote_path);
+            break;
+        }
+
+        total_read += dataCnt;
+    }
+
+    if (strstr(remote_path, "libdyld") == 0)
+    {
+        return FALSE;
+    }
+    else
+    {
+        return TRUE;
+    }
+}
 
 void print_image_path(mach_port_t task, const char* imageFilePath)
 {
