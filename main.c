@@ -6,6 +6,7 @@
 #include <mach/mach_vm.h>
 #include <mach-o/loader.h>
 #include <mach-o/dyld_images.h>
+#include <mach-o/nlist.h>
 
 #define CHUNK_SIZE 256
 #define MAX_PATH_LENGTH 4096
@@ -164,12 +165,35 @@ int main(int argc, char* argv[])
         // Point to the first of load commands.
         vm_address_t cur = (vm_address_t)target_dyld_info->imageLoadAddress + sizeof(struct mach_header_64);
 
+        struct segment_command_64* linkedit = (struct segment_command_64*)malloc(sizeof(struct segment_command_64));
+        if (!linkedit)
+        {
+            fprintf(stderr, "Failed to allocate memory for segment_command_64\n");
+            free(dyld_header);
+            free(local_array);
+            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            return 1;
+        }
+
         struct segment_command_64* seg_cmd = (struct segment_command_64*)malloc(sizeof(struct segment_command_64));
         if (!seg_cmd)
         {
             fprintf(stderr, "Failed to allocate memory for segment_command_64\n");
             free(dyld_header);
             free(local_array);
+            free(linkedit);
+            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            return 1;
+        }
+
+        struct symtab_command* symtab = (struct symtab_command*)malloc(sizeof(struct symtab_command));
+        if (!symtab)
+        {
+            fprintf(stderr, "Failed to allocate memory for segment_command_64\n");
+            free(dyld_header);
+            free(local_array);
+            free(linkedit);
+            free(seg_cmd);
             mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
             return 1;
         }
@@ -180,7 +204,9 @@ int main(int argc, char* argv[])
             fprintf(stderr, "Failed to allocate memory for load_command\n");
             free(dyld_header);
             free(local_array);
+            free(linkedit);
             free(seg_cmd);
+            free(symtab);
             mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
             return 1;
         }
@@ -199,13 +225,14 @@ int main(int argc, char* argv[])
                 free(local_array);
                 free(seg_cmd);
                 free(lc);
+                free(linkedit);
                 mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
                 return 1;
             }
 
             memcpy(lc, (void*)readMem, dataCnt);
 
-            printf("cmd: %d, size: %d\n", lc->cmd, lc->cmdsize);
+            // printf("cmd: %d, size: %d\n", lc->cmd, lc->cmdsize);
 
             if (lc->cmd == LC_SEGMENT_64)
             {
@@ -214,10 +241,12 @@ int main(int argc, char* argv[])
                 kr = mach_vm_read(task, cur, seg_cmd_size, &readMem, &dataCnt);
                 if (kr != KERN_SUCCESS)
                 {
-                    fprintf(stderr, "Failed to read memory from target process: %s\n", mach_error_string(kr));
+                    fprintf(stderr, "Failed to read memory from target process for segment_command_64: %s\n", mach_error_string(kr));
                     free(dyld_header);
                     free(local_array);
                     free(seg_cmd);
+                    free(linkedit);
+                    free(symtab);
                     mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
                     return 1;
                 }
@@ -231,16 +260,117 @@ int main(int argc, char* argv[])
                     slide = (uint64_t)target_dyld_info->imageLoadAddress - seg_cmd->vmaddr;
                     printf("Slide: %llu\n", slide);
                 }
+                else if (strcmp(seg_cmd->segname, SEG_LINKEDIT) == 0)
+                {
+                    memcpy(linkedit, seg_cmd, seg_cmd_size);
+                    printf("Found link edit segment\n");
+                    printf("    vmaddr: 0x%llx\n", linkedit->vmaddr);
+                    printf("   fileoff: %llu\n", linkedit->fileoff);
+                }
             }
             else if (lc->cmd == LC_SYMTAB)
             {
+                mach_vm_size_t symtab_size = sizeof(struct symtab_command);
+                kr = mach_vm_read(task, cur, symtab_size, &readMem, &dataCnt);
+                if (kr != KERN_SUCCESS)
+                {
+                    fprintf(stderr, "Failed to read memory from target process for symtab_command: %s\n", mach_error_string(kr));
+                    free(dyld_header);
+                    free(local_array);
+                    free(seg_cmd);
+                    free(linkedit);
+                    free(symtab);
+                    mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+                    return 1;
+                }
 
+                memcpy(symtab, (void*)readMem, dataCnt);
+
+                printf("Symbol table info:\n");
+                printf("    symoff: 0x%x\n", symtab->symoff);
+                printf("    stroff: 0x%x\n", symtab->stroff);
             }
 
             cur += lc->cmdsize;
         }
 
+        uintptr_t linkedit_base = slide + (linkedit->vmaddr - linkedit->fileoff);
+        printf("Link edit base address: 0x%lx\n", linkedit_base);
+
+        mach_vm_address_t symtab_addr = (mach_vm_address_t)(linkedit_base + symtab->symoff);
+        mach_vm_size_t symtab_size = (mach_vm_size_t)symtab->nsyms * sizeof(struct nlist_64);
+        kr = mach_vm_read(task, symtab_addr, symtab_size, &readMem, &dataCnt);
+        if (kr != KERN_SUCCESS)
+        {
+            fprintf(stderr, "Failed to read memory from target process for symbol table: %s\n", mach_error_string(kr));
+            free(dyld_header);
+            free(local_array);
+            free(seg_cmd);
+            free(linkedit);
+            free(symtab);
+            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            return 1;
+        }
+
+        struct nlist_64* symtab_array = (struct nlist_64*)malloc((size_t)symtab_size);
+        if (!symtab_array)
+        {
+            fprintf(stderr, "Failed to allocate memory for symbol table: %s\n", mach_error_string(kr));
+            free(dyld_header);
+            free(local_array);
+            free(seg_cmd);
+            free(linkedit);
+            free(symtab);
+            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            return 1;
+        }
+
+        memcpy(symtab_array, (void*)readMem, dataCnt);
+
+        uintptr_t str_addr = (uintptr_t)(linkedit_base + symtab->stroff);
+
+        kr = mach_vm_read(task, str_addr, symtab->strsize, &readMem, &dataCnt);
+        if (!symtab_array)
+        {
+            fprintf(stderr, "Failed to allocate memory for string table: %s\n", mach_error_string(kr));
+            free(dyld_header);
+            free(local_array);
+            free(seg_cmd);
+            free(linkedit);
+            free(symtab);
+            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            return 1;
+        }
+
+        char* strtab = (char*)malloc(symtab->strsize);
+        if (!strtab)
+        {
+            fprintf(stderr, "Failed to allocate memory for string table: %s\n", mach_error_string(kr));
+            free(dyld_header);
+            free(local_array);
+            free(seg_cmd);
+            free(linkedit);
+            free(symtab);
+            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            return 1;
+        }
+
+        memcpy(strtab, (void*)readMem, dataCnt);
+
+        printf("Symbol numbers: %u\n", symtab->nsyms);
+
+        struct nlist_64* dlopen_sym = NULL;
+        for (uint32_t i = 0; i < symtab->nsyms; i++)
+        {
+            uint32_t strx = symtab_array[i].n_un.n_strx;
+            const char* symname = strtab + strx;
+            printf("Symbol name: %s\n", symname);
+        }
+
         free(seg_cmd);
+        free(linkedit);
+        free(symtab_array);
+        free(strtab);
     }
 
     free(dyld_header);
