@@ -6,9 +6,7 @@ int main()
 {
     printf("Hello!\n");
 
-    void (*func)();
-
-    void* lib_handle = dlopen("./libsample", 2);
+    void* lib_handle = dlopen("./libsample.dylib", 2);
     if (lib_handle == 0)
     {
         printf("Failed to open libsample\n");
