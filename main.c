@@ -153,9 +153,7 @@ int main(int argc, char* argv[])
     if (dyld_header->magic != MH_MAGIC_64)
     {
         fprintf(stderr, "Got image is not dyld library.\n");
-        free(dyld_header);
-        free(local_array);
-        mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+        goto clean_memory;
     }
 
     printf("This must be dyld image!\n");
@@ -164,50 +162,37 @@ int main(int argc, char* argv[])
     {
         // Point to the first of load commands.
         vm_address_t cur = (vm_address_t)target_dyld_info->imageLoadAddress + sizeof(struct mach_header_64);
-
         struct segment_command_64* linkedit = (struct segment_command_64*)malloc(sizeof(struct segment_command_64));
+        struct segment_command_64* seg_cmd = (struct segment_command_64*)malloc(sizeof(struct segment_command_64));
+        struct symtab_command* symtab = (struct symtab_command*)malloc(sizeof(struct symtab_command));
+        struct load_command* lc = (struct load_command*)malloc(sizeof(struct load_command));
+        struct nlist_64* symtab_array = NULL;
+
         if (!linkedit)
         {
             fprintf(stderr, "Failed to allocate memory for segment_command_64\n");
-            free(dyld_header);
-            free(local_array);
-            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            goto clean_symbol_memory;
             return 1;
         }
 
-        struct segment_command_64* seg_cmd = (struct segment_command_64*)malloc(sizeof(struct segment_command_64));
         if (!seg_cmd)
         {
             fprintf(stderr, "Failed to allocate memory for segment_command_64\n");
-            free(dyld_header);
-            free(local_array);
-            free(linkedit);
-            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            goto clean_symbol_memory;
             return 1;
         }
 
-        struct symtab_command* symtab = (struct symtab_command*)malloc(sizeof(struct symtab_command));
         if (!symtab)
         {
             fprintf(stderr, "Failed to allocate memory for segment_command_64\n");
-            free(dyld_header);
-            free(local_array);
-            free(linkedit);
-            free(seg_cmd);
-            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            goto clean_symbol_memory;
             return 1;
         }
 
-        struct load_command* lc = (struct load_command*)malloc(sizeof(struct load_command));
         if (!lc)
         {
             fprintf(stderr, "Failed to allocate memory for load_command\n");
-            free(dyld_header);
-            free(local_array);
-            free(linkedit);
-            free(seg_cmd);
-            free(symtab);
-            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            goto clean_symbol_memory;
             return 1;
         }
 
@@ -221,12 +206,7 @@ int main(int argc, char* argv[])
             if (kr != KERN_SUCCESS)
             {
                 fprintf(stderr, "Failed to read memory from target process: %s\n", mach_error_string(kr));
-                free(dyld_header);
-                free(local_array);
-                free(seg_cmd);
-                free(lc);
-                free(linkedit);
-                mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+                goto clean_symbol_memory;
                 return 1;
             }
 
@@ -242,12 +222,7 @@ int main(int argc, char* argv[])
                 if (kr != KERN_SUCCESS)
                 {
                     fprintf(stderr, "Failed to read memory from target process for segment_command_64: %s\n", mach_error_string(kr));
-                    free(dyld_header);
-                    free(local_array);
-                    free(seg_cmd);
-                    free(linkedit);
-                    free(symtab);
-                    mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+                    goto clean_memory;
                     return 1;
                 }
 
@@ -275,12 +250,7 @@ int main(int argc, char* argv[])
                 if (kr != KERN_SUCCESS)
                 {
                     fprintf(stderr, "Failed to read memory from target process for symtab_command: %s\n", mach_error_string(kr));
-                    free(dyld_header);
-                    free(local_array);
-                    free(seg_cmd);
-                    free(linkedit);
-                    free(symtab);
-                    mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+                    goto clean_memory;
                     return 1;
                 }
 
@@ -303,25 +273,15 @@ int main(int argc, char* argv[])
         if (kr != KERN_SUCCESS)
         {
             fprintf(stderr, "Failed to read memory from target process for symbol table: %s\n", mach_error_string(kr));
-            free(dyld_header);
-            free(local_array);
-            free(seg_cmd);
-            free(linkedit);
-            free(symtab);
-            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            goto clean_symbol_memory;
             return 1;
         }
 
-        struct nlist_64* symtab_array = (struct nlist_64*)malloc((size_t)symtab_size);
+        symtab_array = (struct nlist_64*)malloc((size_t)symtab_size);
         if (!symtab_array)
         {
             fprintf(stderr, "Failed to allocate memory for symbol table: %s\n", mach_error_string(kr));
-            free(dyld_header);
-            free(local_array);
-            free(seg_cmd);
-            free(linkedit);
-            free(symtab);
-            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            goto clean_symbol_memory;
             return 1;
         }
 
@@ -333,12 +293,7 @@ int main(int argc, char* argv[])
         if (!symtab_array)
         {
             fprintf(stderr, "Failed to allocate memory for string table: %s\n", mach_error_string(kr));
-            free(dyld_header);
-            free(local_array);
-            free(seg_cmd);
-            free(linkedit);
-            free(symtab);
-            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            goto clean_symbol_memory;
             return 1;
         }
 
@@ -346,12 +301,7 @@ int main(int argc, char* argv[])
         if (!strtab)
         {
             fprintf(stderr, "Failed to allocate memory for string table: %s\n", mach_error_string(kr));
-            free(dyld_header);
-            free(local_array);
-            free(seg_cmd);
-            free(linkedit);
-            free(symtab);
-            mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
+            goto clean_symbol_memory;
             return 1;
         }
 
@@ -378,14 +328,16 @@ int main(int argc, char* argv[])
             printf("dlopen symbol address: 0x%llx\n", dlopen_sym->n_value);
         }
 
-        free(seg_cmd);
-        free(linkedit);
-        free(symtab_array);
-        free(strtab);
+clean_symbol_memory:
+        if (seg_cmd) free(seg_cmd);
+        if (linkedit) free(linkedit);
+        if (strtab) free(strtab);
+        if (symtab_array) free(symtab_array);
     }
 
-    free(dyld_header);
-    free(local_array);
+clean_memory:
+    if (dyld_header) free(dyld_header);
+    if (local_array) free(local_array);
     mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
 
     return 0;
