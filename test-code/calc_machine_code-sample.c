@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 
 void print_binary(unsigned long value)
 {
@@ -68,8 +69,14 @@ void calculate_machine_code(uintptr_t value, unsigned int register_number, unsig
     }
 }
 
-int main(void)
+int main(int argc, char* argv[])
 {
+    if (argc == 1)
+    {
+        fprintf(stderr, "Usage: %s <hex value>\n", argv[0]);
+        return 1;
+    }
+
     // 4 命令文を格納
     unsigned char shell_code[16] = {
         0, 0, 0, 0,
@@ -78,7 +85,8 @@ int main(void)
         0, 0, 0, 0,
     };
     
-    unsigned long target = 0x180451c04;
+    unsigned long target = (unsigned long)strtol(argv[1], NULL, 16);
+    printf("Calculating value is 0x%lx\n", target);
     
     calculate_machine_code(target, 0, shell_code);
     
