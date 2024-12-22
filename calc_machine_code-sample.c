@@ -41,7 +41,7 @@ void calculate_machine_code(uintptr_t value, unsigned int register_number, unsig
     
     for (int i = 0; i < 4; i++)
     {
-        unsigned int tmp = first_result >> ((3 - i) * 8) & 0xff;
+        unsigned int tmp = first_result >> (8 * i) & 0xff;
         printf("%d: %x\n", i, tmp);
         machine_code_array[i] = tmp;
     }
@@ -60,7 +60,7 @@ void calculate_machine_code(uintptr_t value, unsigned int register_number, unsig
         
         for (int j = 0; j < 4; j++)
         {
-            unsigned int tmp = target_result >> ((3 - j) * 8) & 0xff;
+            unsigned int tmp = target_result >> (8 * j) & 0xff;
             int index = ((i + 1) * 4 + j);
             printf("%d: %x\n", index, tmp);
             machine_code_array[index] = tmp;
@@ -91,7 +91,7 @@ int main(void)
         for (int j = 0; j < 4; j++)
         {
             int index = (i * 4) + j;
-            result += ((unsigned long)shell_code[index] << (8 * (3 - j)));
+            result += ((unsigned long)shell_code[index] << (8 * j));
         }
         printf("%d: %lx -- ", i, result);
         print_binary(result);
