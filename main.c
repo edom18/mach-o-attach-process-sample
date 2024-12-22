@@ -11,6 +11,9 @@
 #define CHUNK_SIZE 256
 #define MAX_PATH_LENGTH 4096
 
+extern void calculate_machine_code(uintptr_t value, unsigned int register_number, unsigned char* machine_code_array);
+extern void print_binary(unsigned long value);
+
 void print_image_path(mach_port_t task, const char* imageFilePath);
 boolean_t find_dyld_image(mach_port_t task, const char* imageFilePath);
 
@@ -172,28 +175,24 @@ int main(int argc, char* argv[])
         {
             fprintf(stderr, "Failed to allocate memory for segment_command_64\n");
             goto clean_symbol_memory;
-            return 1;
         }
 
         if (!seg_cmd)
         {
             fprintf(stderr, "Failed to allocate memory for segment_command_64\n");
             goto clean_symbol_memory;
-            return 1;
         }
 
         if (!symtab)
         {
             fprintf(stderr, "Failed to allocate memory for segment_command_64\n");
             goto clean_symbol_memory;
-            return 1;
         }
 
         if (!lc)
         {
             fprintf(stderr, "Failed to allocate memory for load_command\n");
             goto clean_symbol_memory;
-            return 1;
         }
 
         printf("Command number: %d\n", dyld_header->ncmds);
@@ -207,7 +206,6 @@ int main(int argc, char* argv[])
             {
                 fprintf(stderr, "Failed to read memory from target process: %s\n", mach_error_string(kr));
                 goto clean_symbol_memory;
-                return 1;
             }
 
             memcpy(lc, (void*)readMem, dataCnt);
@@ -223,7 +221,6 @@ int main(int argc, char* argv[])
                 {
                     fprintf(stderr, "Failed to read memory from target process for segment_command_64: %s\n", mach_error_string(kr));
                     goto clean_memory;
-                    return 1;
                 }
 
                 memcpy(seg_cmd, (void*)readMem, dataCnt);
@@ -251,7 +248,6 @@ int main(int argc, char* argv[])
                 {
                     fprintf(stderr, "Failed to read memory from target process for symtab_command: %s\n", mach_error_string(kr));
                     goto clean_memory;
-                    return 1;
                 }
 
                 memcpy(symtab, (void*)readMem, dataCnt);
@@ -274,7 +270,6 @@ int main(int argc, char* argv[])
         {
             fprintf(stderr, "Failed to read memory from target process for symbol table: %s\n", mach_error_string(kr));
             goto clean_symbol_memory;
-            return 1;
         }
 
         symtab_array = (struct nlist_64*)malloc((size_t)symtab_size);
@@ -282,7 +277,6 @@ int main(int argc, char* argv[])
         {
             fprintf(stderr, "Failed to allocate memory for symbol table: %s\n", mach_error_string(kr));
             goto clean_symbol_memory;
-            return 1;
         }
 
         memcpy(symtab_array, (void*)readMem, dataCnt);
@@ -294,7 +288,6 @@ int main(int argc, char* argv[])
         {
             fprintf(stderr, "Failed to allocate memory for string table: %s\n", mach_error_string(kr));
             goto clean_symbol_memory;
-            return 1;
         }
 
         char* strtab = (char*)malloc(symtab->strsize);
@@ -302,7 +295,6 @@ int main(int argc, char* argv[])
         {
             fprintf(stderr, "Failed to allocate memory for string table: %s\n", mach_error_string(kr));
             goto clean_symbol_memory;
-            return 1;
         }
 
         memcpy(strtab, (void*)readMem, dataCnt);
@@ -326,6 +318,105 @@ int main(int argc, char* argv[])
         {
             printf("Found dlopen symbol!\n");
             printf("dlopen symbol address: 0x%llx\n", dlopen_sym->n_value);
+
+            // シェルコードを仕込む
+            // まずは、対象プロセス内にライブラリパス文字列を配置する
+            const char* lib_path = "./libsample.dylib";
+            size_t path_size = strlen(lib_path) + 1;
+
+            mach_vm_address_t path_addr = 0;
+            kr = mach_vm_allocate(task, &path_addr, path_size, VM_FLAGS_ANYWHERE);
+            if (kr != KERN_SUCCESS)
+            {
+                fprintf(stderr, "Failed to allocate for lib path memory.\n");
+                goto clean_symbol_memory;
+            }
+
+            kr = vm_protect(task, path_addr, path_size, FALSE, VM_PROT_READ | VM_PROT_WRITE);
+            if (kr != KERN_SUCCESS)
+            {
+                fprintf(stderr, "Failed to change protect mode for lib path memory.\n");
+                goto clean_symbol_memory;
+            }
+
+            kr = mach_vm_write(task, path_addr, (vm_offset_t)lib_path, (mach_msg_type_number_t)path_size);
+            if (kr != KERN_SUCCESS)
+            {
+                fprintf(stderr, "Failed to write lib path to the process.\n");
+                goto clean_symbol_memory;
+            }
+
+            uintptr_t path_address_value = (uintptr_t)path_addr;
+            printf("Allocated path memory at %p (value: %lu)\n", (void*)path_addr, path_address_value);
+
+            // シェルコード
+            // アセンブリ:
+            //      ; x0 = path_address
+            //      movz x0, #0x****
+            //      movk x0, #0x****, LSL #16
+            //      movk x0, #0x****, LSL #32
+            //      movk x0, #0x****, LSL #48
+            //
+            //      ; x1 = RTLD_NOW (2)
+            //      movz x1, #2
+            //
+            //      ; x16 = dlopen_address
+            //      movz x16, #0x****
+            //      movk x16, #0x****, LSL #16
+            //      movk x16, #0x****, LSL #32
+            //      movk x16, #0x****, LSL #48
+            //
+            //      ; 関数呼び出し
+            //      blr x16
+            //
+
+            unsigned char shell_code_path_address[4 * 4]; // 4 命令文
+            calculate_machine_code(path_address_value, 0, shell_code_path_address);
+            size_t shellcode_path_address_size = sizeof(shell_code_path_address);
+
+            // movz 110100101 00 0000000000000010 00001
+            //      11010010 10000000 00000000 01000001
+            //      0xd2     0x80     0x00     0x41 // 16 進数表記
+            // これをリトルエンディアンで並べる
+            unsigned char shell_code_rtld[4] = { // 1 命令文
+                0x41, 0x0, 0x80, 0xd2,
+            };
+            size_t shellcode_rtld_size = sizeof(shell_code_rtld);
+
+            unsigned char shell_code_dlopen_address[4 * 4]; // 4 命令文
+            calculate_machine_code((uintptr_t)dlopen_sym->n_value, 16, shell_code_dlopen_address);
+            size_t shellcode_dlopen_address_size = sizeof(shell_code_dlopen_address);
+
+            size_t whole_shellcode_size = shellcode_path_address_size + shellcode_rtld_size + shellcode_dlopen_address_size;
+            printf("-------> shell code size: %lu\n", whole_shellcode_size);
+            unsigned char* shell_code = (unsigned char*)malloc(whole_shellcode_size);
+            if (!shell_code)
+            {
+                fprintf(stderr, "Failed to allocate memory for shell code.\n");
+                goto clean_symbol_memory;
+            }
+
+            memcpy(shell_code, shell_code_path_address, shellcode_path_address_size);
+            memcpy(shell_code + shellcode_path_address_size, shell_code_rtld, shellcode_rtld_size);
+            memcpy(shell_code + shellcode_path_address_size + shellcode_rtld_size, shell_code_dlopen_address, shellcode_dlopen_address_size);
+
+            // 9 命令文出力してみる
+            for (int i = 0; i < 9; i++)
+            {
+                unsigned long result = 0;
+                for (int j = 0; j < 4; j++)
+                {
+                    int index = (i * 4) + j;
+                    result += ((unsigned long)shell_code[index] << (8 * (3 - j)));
+                }
+                printf("%d: %lx -- ", i, result);
+                print_binary(result);
+            }
+
+            // for (int i = 0; i < 32 * 9; i++)
+            // {
+            //     printf("%d: %x\n", i, shell_code[i]);
+            // }
         }
 
 clean_symbol_memory:
