@@ -90,9 +90,10 @@ int main()
     calculate_machine_code((uintptr_t)real_dlopen, 16, shell_code_dlopen_address);
     size_t shellcode_dlopen_address_size = sizeof(shell_code_dlopen_address);
 
+    unsigned long decoded = 0;
     for (int i = 0; i < 4; i++)
     {
-        unsigned long result;
+        unsigned long result = 0;
         for (int j = 0; j < 4; j++)
         {
             int index = (i * 4) + j;
@@ -101,7 +102,11 @@ int main()
             result += tmp << (8 * j);
         }
         printf("[Instruction %d] 0x%lx\n", i, result);
+
+        unsigned long tmp2 = ((result >> 5) & 0xffff) << (i * 16);
+        decoded += tmp2;
     }
+    printf("[DEBUG] Decoded: 0x%lx\n", decoded);
 
     // 分岐命令（ blr x16 ）
     // 11010110 00111111 00000010 00000000
