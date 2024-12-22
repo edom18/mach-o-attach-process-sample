@@ -368,12 +368,13 @@ int main(int argc, char* argv[])
             //
             //      ; 関数呼び出し
             //      blr x16
-            //
 
+            // 第一引数の構築（ mov x0, char_address )
             unsigned char shell_code_path_address[4 * 4]; // 4 命令文
             calculate_machine_code(path_address_value, 0, shell_code_path_address);
             size_t shellcode_path_address_size = sizeof(shell_code_path_address);
 
+            // 第二引数の構築（ mov x1, #2 )
             // movz 110100101 00 0000000000000010 00001
             //      11010010 10000000 00000000 01000001
             //      0xd2     0x80     0x00     0x41 // 16 進数表記
@@ -383,11 +384,21 @@ int main(int argc, char* argv[])
             };
             size_t shellcode_rtld_size = sizeof(shell_code_rtld);
 
+            // dlopen のアドレスをレジスタに設定（ mov x16, dlopen_address ）
             unsigned char shell_code_dlopen_address[4 * 4]; // 4 命令文
             calculate_machine_code((uintptr_t)dlopen_sym->n_value, 16, shell_code_dlopen_address);
             size_t shellcode_dlopen_address_size = sizeof(shell_code_dlopen_address);
 
-            size_t whole_shellcode_size = shellcode_path_address_size + shellcode_rtld_size + shellcode_dlopen_address_size;
+            // 分岐命令（ blr x16 ）
+            // 11010110 00111111 00000010 00000000
+            // 0xd6     0x3f     0x02     0x00 // 16 進数表記
+            // これをリトルエンディアンで並べる
+            unsigned char shell_code_blr[4] = { // 1 命令文
+                0x00, 0x02, 0x3f, 0xd6,
+            };
+            size_t shellcode_blr_address_size = sizeof(shell_code_blr);
+
+            size_t whole_shellcode_size = shellcode_path_address_size + shellcode_rtld_size + shellcode_dlopen_address_size + shellcode_blr_address_size;
             printf("-------> shell code size: %lu\n", whole_shellcode_size);
             unsigned char* shell_code = (unsigned char*)malloc(whole_shellcode_size);
             if (!shell_code)
@@ -399,9 +410,10 @@ int main(int argc, char* argv[])
             memcpy(shell_code, shell_code_path_address, shellcode_path_address_size);
             memcpy(shell_code + shellcode_path_address_size, shell_code_rtld, shellcode_rtld_size);
             memcpy(shell_code + shellcode_path_address_size + shellcode_rtld_size, shell_code_dlopen_address, shellcode_dlopen_address_size);
+            memcpy(shell_code + shellcode_path_address_size + shellcode_rtld_size + shellcode_dlopen_address_size, shell_code_blr, shellcode_blr_address_size);
 
-            // 9 命令文出力してみる
-            for (int i = 0; i < 9; i++)
+            // 10 命令文出力してみる
+            for (int i = 0; i < 10; i++)
             {
                 unsigned long result = 0;
                 for (int j = 0; j < 4; j++)
@@ -412,11 +424,6 @@ int main(int argc, char* argv[])
                 printf("%d: %lx -- ", i, result);
                 print_binary(result);
             }
-
-            // for (int i = 0; i < 32 * 9; i++)
-            // {
-            //     printf("%d: %x\n", i, shell_code[i]);
-            // }
         }
 
 clean_symbol_memory:
