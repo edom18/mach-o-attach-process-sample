@@ -71,9 +71,9 @@ void calculate_machine_code(uintptr_t value, unsigned int register_number, unsig
 
 int main(int argc, char* argv[])
 {
-    if (argc == 1)
+    if (argc < 3)
     {
-        fprintf(stderr, "Usage: %s <hex value>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <hex value> <int register number>\n", argv[0]);
         return 1;
     }
 
@@ -86,9 +86,10 @@ int main(int argc, char* argv[])
     };
     
     unsigned long target = (unsigned long)strtol(argv[1], NULL, 16);
-    printf("Calculating value is 0x%lx\n", target);
+    int register_number = (int)atoi(argv[2]);
+    printf("Calculating value is 0x%lx at register: %d\n", target, register_number);
     
-    calculate_machine_code(target, 0, shell_code);
+    calculate_machine_code(target, register_number, shell_code);
     
     printf("=============================\n");
     
@@ -96,6 +97,8 @@ int main(int argc, char* argv[])
     for (int i = 0; i < 4; i++)
     {
         unsigned long result = 0;
+        // 32 bit = 4 バイトデータがリトルエンディアンで格納されているので、
+        // それぞれ取り出し、適切にオフセットさせる
         for (int j = 0; j < 4; j++)
         {
             int index = (i * 4) + j;
