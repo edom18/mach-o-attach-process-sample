@@ -7,25 +7,15 @@
 #include <mach/mach_vm.h>
 #include <mach/arm/thread_state.h>
 
+extern void calculate_machine_code(uintptr_t value, unsigned int register_number, unsigned char* machine_code_array);
+
 //--------------------------------------
 // 1. 呼び出したい関数 (ターゲット)
 //    今回は x+1 を返すだけ。
 //--------------------------------------
-int myfunc(int x) {
-    return x + 1;
-}
-
-//--------------------------------------
-// Helper: 32bit命令をリトルエンディアンでバイト配列に書き込む
-//--------------------------------------
-void put_instr_le(unsigned long instr, unsigned char *out)
+int myfunc(int x)
 {
-    // instrは32bitのARM64命令(例: 0xd2800000)
-    // リトルエンディアンでメモリに書き込み
-    out[0] = (instr >>  0) & 0xff;
-    out[1] = (instr >>  8) & 0xff;
-    out[2] = (instr >> 16) & 0xff;
-    out[3] = (instr >> 24) & 0xff;
+    return x + 1;
 }
 
 //--------------------------------------
@@ -41,74 +31,65 @@ int main(void) {
     //    blr x16
     //    b .   (無限ループ)
 
-    // (1) movz x0, #42 → 0x5280022A (アセンブリ上)
-    unsigned long instr_movz_x0_42 = 0x5280022a;
-    //   sf=1(64bit) movz w0,#imm とか色々ありますが、ここでは簡易でOK
-    //   実際には movz x0,#42 の場合は 0xD28002A0 となるパターンもあるが
-    //   32bit版とのエイリアスが絡むため、ここでは固定値 0x5280022a でも
-    //   x0に42が入ります。(ARM64のエイリアス動作)
+    // 引数のセットアップはハードコードする
+    unsigned char instr_movz_x0_42[4] = {
+        0x2a, 0x02, 0x80, 0x52,
+    };
+    size_t instr_movz_x0_42_size = sizeof(instr_movz_x0_42);
 
-    // (2) 64ビットアドレスを x16 にロード
-    //  下位16ビットずつ movz(1回) + movk(3回) で合計4命令生成
+    unsigned char instr_mov_x16[4 * 4];
+    size_t instr_mov_x16_size = sizeof(instr_mov_x16);
+    calculate_machine_code(myfunc_addr, 16, instr_mov_x16);
 
-    // アドレスを16bit×4に分割
-    uint16_t part0 = (myfunc_addr >>  0) & 0xffff;
-    uint16_t part1 = (myfunc_addr >> 16) & 0xffff;
-    uint16_t part2 = (myfunc_addr >> 32) & 0xffff;
-    uint16_t part3 = (myfunc_addr >> 48) & 0xffff;
+    // 命令文を出力してみる
+    for (int i = 0; i < 4; i++)
+    {
+        unsigned long result = 0;
+        for (int j = 0; j < 4; j++)
+        {
+            int index = (i * 4) + j;
+            unsigned int tmp = (unsigned int)instr_mov_x16[index];
+            printf("%02x ", tmp);
+            result += tmp << (8 * j);
+        }
+        printf("%d: %lx\n", i, result);
+    }
 
-    // movz x16, #part0
-    unsigned long instr_movz_x16 =
-        0xd2800000                 // movzのベース (sf=1, opc=10, hw=0)
-      | (16)                       // Rd=x16 は下位5bit
-      | ((part0 & 0xffff) << 5);   // imm16 << 5
+    // blr x16 -> 0xd63f0200
+    unsigned char instr_blr_x16[4] = { // 1 命令文
+        0x00, 0x02, 0x3f, 0xd6,
+    };
+    size_t instr_blr_x16_size = sizeof(instr_blr_x16);
 
-    // movk x16, #part1, lsl #16
-    unsigned long instr_movk_x16_1 =
-        0xf2800000                 // movkのベース (sf=1, opc=11, hw=?)
-      | (16)                       // Rd=x16
-      | ((part1 & 0xffff) << 5)
-      | (1 << 21);                 // hw=1 => lsl #16
+    // b . -> 0x14000000
+    unsigned char instr_b_loop[4] = {
+        // 0x0, 0x0, 0x0, 0x14,
+    };
+    memset(instr_b_loop, 0, 4);
+    instr_b_loop[3] = 0x14;
+    size_t instr_b_loop_size = sizeof(instr_b_loop);
+    // NOTE: なぜかこうしてアクセスしないと以下のオフセット計算でおかしくなるのでこうしておく
+    for (int i = 0; i < 4; i++)
+    {
+        printf("===> %d\n", instr_b_loop[i]);
+    }
 
-    // movk x16, #part2, lsl #32
-    unsigned long instr_movk_x16_2 =
-        0xf2800000
-      | (16)
-      | ((part2 & 0xffff) << 5)
-      | (2 << 21);                 // hw=2 => lsl #32
+    // シェルコード全体
+    unsigned char shellcode[4 * 6];
+    // size_t shellcode_size = sizeof(shellcode);
 
-    // movk x16, #part3, lsl #48
-    unsigned long instr_movk_x16_3 =
-        0xf2800000
-      | (16)
-      | ((part3 & 0xffff) << 5)
-      | (3 << 21);                 // hw=3 => lsl #48
-
-    // (3) blr x16 → 0xd63f0200
-    // (4) b .     → 0x14000000 (リトルエンディアンで 00 00 00 14)
-    unsigned long instr_blr_x16 = 0xd63f0200;
-    unsigned long instr_b_loop  = 0x14000000;
-
-    // シェルコードをバイト配列にまとめる
-    unsigned char shellcode[4*6];
     int offset = 0;
-
-    // movz x0, #42
-    put_instr_le(instr_movz_x0_42, &shellcode[offset]); offset += 4;
-
-    // 4命令で x16 = myfunc_addr
-    put_instr_le(instr_movz_x16,      &shellcode[offset]); offset += 4;
-    put_instr_le(instr_movk_x16_1,    &shellcode[offset]); offset += 4;
-    put_instr_le(instr_movk_x16_2,    &shellcode[offset]); offset += 4;
-    put_instr_le(instr_movk_x16_3,    &shellcode[offset]); offset += 4;
-
-    // blr x16
-    put_instr_le(instr_blr_x16, &shellcode[offset]); offset += 4;
-
-    // b .
-    put_instr_le(instr_b_loop,  &shellcode[offset]); offset += 4;
+    memcpy(shellcode + offset, (void*)instr_movz_x0_42, instr_movz_x0_42_size); offset += instr_movz_x0_42_size;
+    printf("1--> %d\n", offset);
+    memcpy(shellcode + offset, (void*)instr_mov_x16, instr_mov_x16_size);       offset += instr_mov_x16_size;
+    printf("2--> %d\n", offset);
+    memcpy(shellcode + offset, (void*)instr_blr_x16, instr_blr_x16_size);       offset += instr_blr_x16_size;
+    printf("3--> %d\n", offset);
+    memcpy(shellcode + offset, (void*)instr_b_loop, instr_b_loop_size);         offset += instr_b_loop_size;
+    printf("4--> %d\n", offset);
 
     size_t shellcode_size = offset;
+    printf("Shell code size: %d\n", offset);
 
     // 命令文を出力してみる
     for (int i = 0; i < 6; i++)
@@ -124,12 +105,11 @@ int main(void) {
         printf("%d: %lx\n", i, result);
     }
 
-    printf("---> %lu\n", shellcode_size);
-
     //----------------------------------------
     // コード領域を確保し、W→RXの順で保護を付与
     //----------------------------------------
     mach_port_t task = mach_task_self();
+
     mach_vm_address_t code_addr = 0;
     mach_vm_allocate(task, &code_addr, shellcode_size, VM_FLAGS_ANYWHERE);
 
