@@ -6,7 +6,7 @@ extern void calculate_machine_code(uintptr_t value, unsigned int register_number
 int main()
 {
     uintptr_t address = 0x180451c04;
-    unsigned char shell_code[32 * 4];
+    unsigned char shell_code[4 * 4];
     calculate_machine_code(address, 0, shell_code);
 
     for (int i = 0; i < 4; i++)
