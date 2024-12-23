@@ -1,3 +1,8 @@
+///
+/// This code is showing how to inject simple shell code to any other process.
+/// To inject this code, you should turn off SIP setting or check target process permission.
+///
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
