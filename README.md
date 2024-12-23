@@ -6,8 +6,8 @@ I made some C codes to learn attaching process, getting library images and injec
 
 NOTE: `inject-simple-shellcode.c` works correctly but `main.c` that is tyring to inject dylib does not work.
 
-I recommend to refer inject way to below gist code. \\
-    -> https://gist.github.com/vocaeq/fbac63d5d36bc6e1d6d99df9c92f75dc \\
+I recommend to refer inject way to below gist code.  
+    -> https://gist.github.com/vocaeq/fbac63d5d36bc6e1d6d99df9c92f75dc  
 This code show you that the injection works perfectly.
 
 --------------
@@ -18,5 +18,5 @@ This code show you that the injection works perfectly.
 
 ※ `inject-simple-shellcode.c` は正常に動作しますが、動的ライブラリの注入を試みている `main.c` は注入後にクラッシュする状態です。
 
-動的ライブラリを注入して動作を確認したい場合は以下の Gist コードが完全に動くのでそちらを参照ください。 \\
+動的ライブラリを注入して動作を確認したい場合は以下の Gist コードが完全に動くのでそちらを参照ください。  
 https://gist.github.com/vocaeq/fbac63d5d36bc6e1d6d99df9c92f75dc
