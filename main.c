@@ -1,6 +1,17 @@
+///
+/// This code is trying to inject dylib to other process.
+/// There are some resasons to fail injecting.
+/// But these code are helpful to know how create shell code and how copy the code to other process.
+/// 
+/// I recommend to refer inject way to below gist code.
+///     -> https://gist.github.com/vocaeq/fbac63d5d36bc6e1d6d99df9c92f75dc
+/// This code show you that the injection works perfectly.
+///
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dlfcn.h>
 #include <mach/mach.h>
 #include <mach/task_info.h>
 #include <mach/mach_vm.h>
@@ -10,6 +21,8 @@
 
 #define CHUNK_SIZE 256
 #define MAX_PATH_LENGTH 4096
+
+#define DEBUG_FOR_MINE 1
 
 extern void calculate_machine_code(uintptr_t value, unsigned int register_number, unsigned char* machine_code_array);
 extern void print_binary(unsigned long value);
@@ -30,6 +43,9 @@ int main(int argc, char* argv[])
     kern_return_t kr;
     mach_port_t task;
 
+#if DEBUG_FOR_MINE
+    task = mach_task_self();
+#else
     // ターゲットのタスクポート取得
     kr = task_for_pid(mach_task_self(), pid, &task);
     if (kr != KERN_SUCCESS)
@@ -37,6 +53,7 @@ int main(int argc, char* argv[])
         fprintf(stderr, "task_for_pid failed: %s\n", mach_error_string(kr));
         return 1;
     }
+#endif
 
     // タスク情報から dyld_all_image_infos のアドレス取得
     struct task_dyld_info dyld_info;
@@ -319,6 +336,11 @@ int main(int argc, char* argv[])
             printf("Found dlopen symbol!\n");
             printf("dlopen symbol address: 0x%llx\n", dlopen_sym->n_value);
 
+#if DEBUG_FOR_MINE
+            void* real_dlopen = dlsym(RTLD_DEFAULT, "dlopen");
+            printf("[DEBUG] dlsym reported dlopen: %p\n", real_dlopen);
+#endif
+
             // シェルコードを仕込む
             // まずは、対象プロセス内にライブラリパス文字列を配置する
             const char* lib_path = "./libsample.dylib";
@@ -386,7 +408,11 @@ int main(int argc, char* argv[])
 
             // dlopen のアドレスをレジスタに設定（ mov x16, dlopen_address ）
             unsigned char shell_code_dlopen_address[4 * 4]; // 4 命令文
+#if DEBUG_FOR_MINE
+            calculate_machine_code((uintptr_t)real_dlopen, 16, shell_code_dlopen_address);
+#else
             calculate_machine_code((uintptr_t)dlopen_sym->n_value, 16, shell_code_dlopen_address);
+#endif
             size_t shellcode_dlopen_address_size = sizeof(shell_code_dlopen_address);
 
             // 分岐命令（ blr x16 ）
@@ -419,11 +445,23 @@ int main(int argc, char* argv[])
                 for (int j = 0; j < 4; j++)
                 {
                     int index = (i * 4) + j;
-                    result += ((unsigned long)shell_code[index] << (8 * (3 - j)));
+                    result += ((unsigned long)shell_code[index] << (8 * j));
                 }
-                printf("%d: %lx -- ", i, result);
-                print_binary(result);
+                printf("%d: %lx\n", i, result);
+                // print_binary(result);
             }
+
+            for (int i = 0; i < 40; i++)
+            {
+                if (i % 4 == 0)
+                {
+                    printf("\n");
+                }
+
+                printf("0x%x ", shell_code[i]);
+            }
+
+            printf("\n");
 
             // コード用メモリ領域確保
             mach_vm_address_t code_addr = 0;
@@ -433,6 +471,7 @@ int main(int argc, char* argv[])
                 fprintf(stderr, "Failed to allocate code memory on target process.\n");
                 goto clean_symbol_memory;
             }
+            printf("Allocated shell code memory address: %p\n", (void*)code_addr);
 
             // 書き込み・読み込み権限を付与
             kr = vm_protect(task, code_addr, whole_shellcode_size, FALSE, VM_PROT_READ | VM_PROT_WRITE);
