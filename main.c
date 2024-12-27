@@ -22,7 +22,7 @@
 #define CHUNK_SIZE 256
 #define MAX_PATH_LENGTH 4096
 
-#define DEBUG_FOR_MINE 1
+#define DEBUG_FOR_MINE 0
 
 extern void calculate_machine_code(uintptr_t value, unsigned int register_number, unsigned char* machine_code_array);
 extern void print_binary(unsigned long value);
@@ -93,6 +93,7 @@ int main(int argc, char* argv[])
     memcpy(&local_infos, (void*)readMem, sizeof(local_infos));
     mach_vm_deallocate(mach_task_self(), readMem, dataCnt);
 
+    // dyld_all_image_infos のバージョンと、info array count を出力
     printf("dyld_all_image_infos.version: %u\n", local_infos.version);
     printf("dyld_all_image_infos.infoArrayCount: %u\n", local_infos.infoArrayCount);
 
@@ -111,7 +112,7 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    struct dyld_image_info* local_array = malloc(arraySize);
+    struct dyld_image_info* local_array = (struct dyld_image_info*)malloc(arraySize);
     if (!local_array)
     {
         fprintf(stderr, "malloc failed.\n");
@@ -127,15 +128,15 @@ int main(int argc, char* argv[])
     // ロードされたイメージ情報を表示
     for (uint32_t i = 0; i < local_infos.infoArrayCount; i++)
     {
-        // printf("Image %u:\n", i);
-        // printf("    LoadAddress: %p\n", local_array[i].imageLoadAddress);
-        // print_image_path(task, local_array[i].imageFilePath);
+        printf("Image %u:\n", i);
+        printf("    LoadAddress: %p\n", local_array[i].imageLoadAddress);
+        print_image_path(task, local_array[i].imageFilePath);
         boolean_t found = find_dyld_image(task, local_array[i].imageFilePath);
         if (found == TRUE)
         {
             printf("Found the dyld at [%s]\n", local_array[i].imageFilePath);
             target_dyld_info = (struct dyld_image_info*)&local_array[i];
-            break;
+            // break;
         }
     }
 
@@ -145,6 +146,7 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    printf("\n\n--------------------------------------\n\n");
     printf("Saved dyld_image_info image file path: ");
     print_image_path(task, target_dyld_info->imageFilePath);
 
@@ -170,13 +172,15 @@ int main(int argc, char* argv[])
 
     memcpy(dyld_header, (void*)readMem, dataCnt);
 
-    if (dyld_header->magic != MH_MAGIC_64)
+    if (dyld_header->magic == MH_MAGIC_64)
+    {
+        printf("This must be dyld image!\n");
+    }
+    else
     {
         fprintf(stderr, "Got image is not dyld library.\n");
         goto clean_memory;
     }
-
-    printf("This must be dyld image!\n");
 
     // Search __TEXT segment
     {
@@ -252,7 +256,7 @@ int main(int argc, char* argv[])
                 else if (strcmp(seg_cmd->segname, SEG_LINKEDIT) == 0)
                 {
                     memcpy(linkedit, seg_cmd, seg_cmd_size);
-                    printf("Found link edit segment\n");
+                    printf("Found link edit segment. [%s]\n", seg_cmd->segname);
                     printf("    vmaddr: 0x%llx\n", linkedit->vmaddr);
                     printf("   fileoff: %llu\n", linkedit->fileoff);
                 }
@@ -323,7 +327,7 @@ int main(int argc, char* argv[])
         {
             uint32_t strx = symtab_array[i].n_un.n_strx;
             const char* symname = strtab + strx;
-            // printf("Symbol name: %s\n", symname);
+            printf("Symbol name: %s\n", symname);
 
             if (symname && strcmp(symname, "_dlopen") == 0)
             {
@@ -333,13 +337,12 @@ int main(int argc, char* argv[])
 
         if (dlopen_sym)
         {
+            uint64_t dlopen_sym_addr = slide + dlopen_sym->n_value;
             printf("Found dlopen symbol!\n");
-            printf("dlopen symbol address: 0x%llx\n", dlopen_sym->n_value);
+            printf("dlopen symbol address: 0x%llx\n", dlopen_sym_addr);
 
-#if DEBUG_FOR_MINE
-            void* real_dlopen = dlsym(RTLD_DEFAULT, "dlopen");
+            void* real_dlopen = (void*)dlopen;
             printf("[DEBUG] dlsym reported dlopen: %p\n", real_dlopen);
-#endif
 
             // シェルコードを仕込む
             // まずは、対象プロセス内にライブラリパス文字列を配置する
