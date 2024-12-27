@@ -27,8 +27,7 @@
 extern void calculate_machine_code(uintptr_t value, unsigned int register_number, unsigned char* machine_code_array);
 extern void print_binary(unsigned long value);
 
-void print_image_path(mach_port_t task, const char* imageFilePath);
-boolean_t find_dyld_image(mach_port_t task, const char* imageFilePath);
+void get_image_path(mach_port_t task, const char* imageFilePath, char* remote_path);
 
 int main(int argc, char* argv[])
 {
@@ -44,7 +43,7 @@ int main(int argc, char* argv[])
     mach_port_t task;
 
 #if DEBUG_FOR_MINE
-    task = mach_task_self();
+    // task = mach_task_self();
 #else
     // ターゲットのタスクポート取得
     kr = task_for_pid(mach_task_self(), pid, &task);
@@ -70,8 +69,8 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    mach_vm_address_t infos_addr = (mach_vm_address_t)dyld_info.all_image_info_addr;
-    mach_vm_size_t infos_size = (mach_vm_size_t)dyld_info.all_image_info_size;
+    mach_vm_address_t infos_addr = dyld_info.all_image_info_addr;
+    mach_vm_size_t infos_size = dyld_info.all_image_info_size;
 
     if (infos_addr == 0 || infos_size == 0)
     {
@@ -126,13 +125,18 @@ int main(int argc, char* argv[])
     struct dyld_image_info* target_dyld_info;
 
     // ロードされたイメージ情報を表示
+    char remote_path[CHUNK_SIZE];
     for (uint32_t i = 0; i < local_infos.infoArrayCount; i++)
     {
+        memset(remote_path, '\0', CHUNK_SIZE);
+
         printf("Image %u:\n", i);
         printf("    LoadAddress: %p\n", local_array[i].imageLoadAddress);
-        print_image_path(task, local_array[i].imageFilePath);
-        boolean_t found = find_dyld_image(task, local_array[i].imageFilePath);
-        if (found == TRUE)
+        get_image_path(task, local_array[i].imageFilePath, remote_path);
+        printf("    Image Path: %s\n", remote_path);
+
+        const char* target_lib_name = "libdyld";
+        if (strstr(remote_path, target_lib_name) != 0)
         {
             printf("Found the dyld at [%s]\n", local_array[i].imageFilePath);
             target_dyld_info = (struct dyld_image_info*)&local_array[i];
@@ -147,8 +151,8 @@ int main(int argc, char* argv[])
     }
 
     printf("\n\n--------------------------------------\n\n");
-    printf("Saved dyld_image_info image file path: ");
-    print_image_path(task, target_dyld_info->imageFilePath);
+    printf("Saved dyld_image_info image file path: %s\n", target_dyld_info->imageFilePath);
+    // print_image_path(task, target_dyld_info->imageFilePath);
 
     // 見つけた dyld.dylib のヘッダを読み込む
     mach_vm_size_t mach_header_size = sizeof(struct mach_header_64);
@@ -594,58 +598,8 @@ clean_memory:
     return 0;
 }
 
-boolean_t find_dyld_image(mach_port_t task, const char* imageFilePath)
+void get_image_path(mach_port_t task, const char* imageFilePath, char* remote_path)
 {
-    char remote_path[MAX_PATH_LENGTH];
-    size_t total_read = 0;
-
-    kern_return_t kr;
-
-    while (total_read < MAX_PATH_LENGTH)
-    {
-        vm_offset_t readMem;
-        mach_msg_type_number_t dataCnt;
-        mach_vm_address_t read_addr = (mach_vm_address_t)((uintptr_t)imageFilePath + total_read);
-
-        size_t to_read = CHUNK_SIZE;
-        if (total_read + CHUNK_SIZE > MAX_PATH_LENGTH)
-        {
-            to_read = MAX_PATH_LENGTH - total_read;
-        }
-
-        kr = mach_vm_read(task, read_addr, to_read, &readMem, &dataCnt);
-        if (kr != KERN_SUCCESS)
-        {
-            return FALSE;
-        }
-
-        memcpy(remote_path + total_read, (void*)readMem, dataCnt);
-
-        char* null_pos = memchr(remote_path + total_read, '\0', dataCnt);
-        if (null_pos)
-        {
-            size_t str_len = (null_pos - remote_path);
-            remote_path[str_len] = '\0';
-            // printf("Image file path: %s\n", remote_path);
-            break;
-        }
-
-        total_read += dataCnt;
-    }
-
-    if (strstr(remote_path, "libdyld") == 0)
-    {
-        return FALSE;
-    }
-    else
-    {
-        return TRUE;
-    }
-}
-
-void print_image_path(mach_port_t task, const char* imageFilePath)
-{
-    char remote_path[MAX_PATH_LENGTH];
     size_t total_read = 0;
 
     while (total_read < MAX_PATH_LENGTH)
@@ -676,8 +630,7 @@ void print_image_path(mach_port_t task, const char* imageFilePath)
             // Null 終端発見
             size_t str_len = (null_pos - remote_path);
             remote_path[str_len] = '\0';
-            printf("imageFilePath: %s\n", remote_path);
-            break;
+            return;
         }
 
         total_read += dataCnt;
