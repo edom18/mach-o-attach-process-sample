@@ -414,7 +414,7 @@ int main(int argc, char* argv[])
 #if DEBUG_FOR_MINE
             calculate_machine_code((uintptr_t)real_dlopen, 16, shell_code_dlopen_address);
 #else
-            calculate_machine_code((uintptr_t)dlopen_sym->n_value, 16, shell_code_dlopen_address);
+            calculate_machine_code(dlopen_sym_addr, 16, shell_code_dlopen_address);
 #endif
             size_t shellcode_dlopen_address_size = sizeof(shell_code_dlopen_address);
 
